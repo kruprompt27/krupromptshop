@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ครูพร้อมสอน - E-Commerce (Google Sheets)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Sarabun -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { font-family: 'Sarabun', sans-serif; }
+        .modal-content::-webkit-scrollbar { width: 8px; }
+        .modal-content::-webkit-scrollbar-track { background: #f1f1f1; }
+        .modal-content::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        .modal-content::-webkit-scrollbar-thumb:hover { background: #555; }
+        .animate-spin { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <div id="app-root"></div>
+    <div id="modal-root"></div>
+
+    <script type="module">
+        // !!! สำคัญ: นำ URL ของ Google Apps Script ที่คัดลอกไว้ มาวางที่นี่ !!!
+        const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyPzWwHu8K1Jeujlo9mlphp8L9XUW86ug0Jzan5iQB45TWLw43Paflr6izuA5DWLYfSjA/exec";
+
+        // --- App State ---
+        const state = {
+            isLoading: true,
+            isAdminMode: false,
+            showAdminLogin: false,
+            currentPage: 'shop',
+            categories: [],
+            products: [],
+            orders: [],
+            paymentSettings: {
+                qrCodeImage: 'https://placehold.co/300x300/f3f4f6/6b7280?text=QR+Code',
+                bankInfo: 'Thai QR Payment - PromptPay',
+                accountName: 'ครูพร้อมสอน'
+            },
+            categoryForm: { id: null, name: '' },
+            showCategoryForm: false,
+            productForm: { id: null, name: '', price: '', description: '', category: '', stock: '' },
+            showProductForm: false,
+            selectedOrder: null,
+            showOrderDetails: false,
+            cart: [],
+            customerInfo: { contactName: '', email: '' },
+            showCheckout: false,
+            showPayment: false,
+            showOrderSummary: false,
+            orderComplete: false,
+            selectedCategory: '',
+            orderData: null,
+            alertModal: { isOpen: false, message: '' },
+            confirmModal: { isOpen: false, message: '', onConfirm: () => {} },
+        };
+
+        // --- Admin Credentials ---
+        const ADMIN_USER = 'krup';
+        const ADMIN_PASSWORD = 'kp0000';
+        
+        const appRoot = document.getElementById('app-root');
+        const modalRoot = document.getElementById('modal-root');
+
+        // --- State Update & Re-render ---
+        function setState(newState) {
+            Object.assign(state, newState);
+            render();
+        }
+
+        // --- Render Functions ---
+        function render() {
+            if (SCRIPT_URL === "YOUR_GOOGLE_APPS_SCRIPT_URL") {
+                 appRoot.innerHTML = `<div class="flex justify-center items-center h-screen bg-red-50"><div class="text-center p-8 bg-white rounded-lg shadow-lg"><h1 class="text-2xl font-bold text-red-600 mb-4">ตั้งค่าไม่สมบูรณ์</h1><p class="text-gray-700">กรุณาใส่ URL ของ Google Apps Script ในไฟล์ HTML</p></div></div>`;
+                 return;
+            }
+            if (state.isLoading) {
+                 appRoot.innerHTML = `<div class="flex justify-center items-center h-screen"><div class="text-center"><div class="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-green-600 mx-auto"></div><p class="text-xl mt-4 text-gray-700">กำลังโหลดข้อมูล...</p></div></div>`;
+            } else if (state.isAdminMode) {
+                appRoot.innerHTML = AdminView();
+            } else {
+                appRoot.innerHTML = ShopView();
+            }
+
+            modalRoot.innerHTML = `
+                ${state.showAdminLogin ? AdminLoginModal() : ''}
+                ${state.showCategoryForm ? CategoryFormModal() : ''}
+                ${state.showProductForm ? ProductFormModal() : ''}
+                ${state.showCheckout ? CheckoutModal() : ''}
+                ${state.showPayment ? PaymentModal() : ''}
+                ${state.showOrderSummary && state.orderData ? OrderSummaryModal(state.orderData) : ''}
+                ${state.orderComplete ? OrderCompleteModal() : ''}
+                ${state.alertModal.isOpen ? AlertModal(state.alertModal.message) : ''}
+                ${state.confirmModal.isOpen ? ConfirmModal(state.confirmModal.message) : ''}
+                ${state.showOrderDetails && state.selectedOrder ? OrderDetailsModal(state.selectedOrder) : ''}
+            `;
+            
+            lucide.createIcons();
+        }
+
+        // --- Data Fetching Functions ---
+        async function fetchData(action) {
+            try {
+                const response = await fetch(`${SCRIPT_URL}?action=${action}`);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const result = await response.json();
+                if (result.status === 'success') {
+                    return result.data;
+                } else {
+                    throw new Error(result.message);
+                }
+            } catch (error) {
+                console.error(`Error fetching ${action}:`, error);
+                actions.showAlert(`เกิดข้อผิดพลาดในการโหลดข้อมูล: ${action}`);
+                return [];
+            }
+        }
+
+        async function postData(action, payload) {
+            try {
+                const response = await fetch(SCRIPT_URL, {
+                    method: 'POST',
+                    mode: 'no-cors', // Required for simple POST requests to Apps Script
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action, payload })
+                });
+                // no-cors mode doesn't allow reading the response, so we proceed optimistically
+                return { status: 'success' };
+            } catch (error) {
+                 console.error(`Error posting ${action}:`, error);
+                 actions.showAlert(`เกิดข้อผิดพลาดในการบันทึกข้อมูล: ${action}`);
+                 return { status: 'error', message: error.message };
+            }
+        }
+        
+        // --- Action Handlers ---
+        const actions = {
+            showAlert: (message) => setState({ alertModal: { isOpen: true, message } }),
+            closeAlert: () => setState({ alertModal: { isOpen: false, message: '' } }),
+            showConfirm: (message, onConfirm) => setState({ confirmModal: { isOpen: true, message, onConfirm } }),
+            closeConfirm: () => setState({ confirmModal: { isOpen: false, message: '', onConfirm: () => {} } }),
+            handleConfirm: () => {
+                state.confirmModal.onConfirm();
+                actions.closeConfirm();
+            },
+            showAdminLogin: () => setState({ showAdminLogin: true }),
+            closeAdminLogin: () => setState({ showAdminLogin: false }),
+            setCurrentPage: (page) => setState({ currentPage: page }),
+            setSelectedCategory: (category) => setState({ selectedCategory: category }),
+            addToCart: (productId) => {
+                const product = state.products.find(p => p.id.toString() === productId.toString());
+                if (!product) return;
+                const existingItem = state.cart.find(item => item.id.toString() === productId.toString());
+                if (product.stock <= (existingItem?.quantity || 0)) {
+                    actions.showAlert("สินค้าไม่เพียงพอในสต็อก");
+                    return;
+                }
+                const newCart = existingItem
+                    ? state.cart.map(item => item.id.toString() === productId.toString() ? { ...item, quantity: item.quantity + 1 } : item)
+                    : [...state.cart, { ...product, quantity: 1 }];
+                setState({ cart: newCart });
+            },
+            removeFromCart: (productId) => {
+                setState({ cart: state.cart.filter(item => item.id.toString() !== productId.toString()) });
+            },
+            updateCartQuantity: (productId, change) => {
+                const changeVal = parseInt(change, 10);
+                const product = state.products.find(p => p.id.toString() === productId.toString());
+                const itemInCart = state.cart.find(item => item.id.toString() === productId.toString());
+                if (!product || !itemInCart) return;
+                
+                const newQuantity = itemInCart.quantity + changeVal;
+
+                if (newQuantity > product.stock) {
+                    actions.showAlert(`สินค้ามีในสต็อกเพียง ${product.stock} ชิ้น`);
+                    return;
+                }
+                
+                if (newQuantity <= 0) {
+                    actions.removeFromCart(productId);
+                } else {
+                    const newCart = state.cart.map(item => item.id.toString() === productId.toString() ? { ...item, quantity: newQuantity } : item);
+                    setState({ cart: newCart });
+                }
+            },
+            showCheckout: () => setState({ showCheckout: true }),
+            closeCheckout: () => setState({ showCheckout: false }),
+            closePayment: () => setState({ showPayment: false }),
+            completeOrder,
+            finishOrder,
+            handleAdminLogout,
+            showProductForm: (productId) => {
+                const product = productId ? state.products.find(p => p.id.toString() === productId.toString()) : { id: null, name: '', price: '', description: '', category: '', stock: '' };
+                setState({ showProductForm: true, productForm: { ...product } });
+            },
+            closeProductForm: () => setState({ showProductForm: false }),
+            handleDeleteProduct,
+            showCategoryForm: (categoryId) => {
+                const category = categoryId ? state.categories.find(c => c.id.toString() === categoryId.toString()) : { id: null, name: '' };
+                setState({ showCategoryForm: true, categoryForm: { ...category } });
+            },
+            closeCategoryForm: () => setState({ showCategoryForm: false }),
+            handleDeleteCategory,
+            handlePaymentSettingsUpdate,
+            handleViewOrderDetails: (orderId) => {
+                const order = state.orders.find(o => o.id.toString() === orderId.toString());
+                setState({ selectedOrder: order, showOrderDetails: true });
+            },
+            closeOrderDetails: () => setState({ showOrderDetails: false }),
+            handleUpdateOrderStatus,
+            handleDeleteOrder,
+        };
+
+        // --- Logic Functions ---
+        function handleAdminLogin(e) {
+            e.preventDefault();
+            const username = e.target.elements.username.value;
+            const password = e.target.elements.password.value;
+            if (username === ADMIN_USER && password === ADMIN_PASSWORD) {
+                setState({ isAdminMode: true, showAdminLogin: false, currentPage: 'orders' });
+            } else {
+                actions.showAlert('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+            }
+        }
+
+        function handleAdminLogout() {
+            setState({ isAdminMode: false, currentPage: 'shop' });
+        }
+
+        async function handleAddCategory(e) {
+            e.preventDefault();
+            const name = e.target.elements.name.value.trim();
+            if (!name) return actions.showAlert('กรุณากรอกชื่อหมวดหมู่');
+            if (state.categories.some(cat => cat.name.toLowerCase() === name.toLowerCase())) {
+                return actions.showAlert('หมวดหมู่นี้มีอยู่แล้ว');
+            }
+            
+            await postData('addCategory', { name });
+            actions.showAlert('กำลังเพิ่มหมวดหมู่... หน้าเว็บจะรีเฟรชข้อมูลในไม่ช้า');
+            setState({ showCategoryForm: false });
+            // Reload data after a short delay
+            setTimeout(loadAllData, 2000);
+        }
+
+        async function handleUpdateCategory(e) {
+            e.preventDefault();
+            const name = e.target.elements.name.value.trim();
+            const id = state.categoryForm.id;
+            if (!name) return actions.showAlert('กรุณากรอกชื่อหมวดหมู่');
+            
+            const oldCategory = state.categories.find(c => c.id.toString() === id.toString());
+            if (!oldCategory) return actions.showAlert("ไม่พบหมวดหมู่");
+
+            await postData('updateCategory', { id, name, oldName: oldCategory.name });
+            actions.showAlert('กำลังอัปเดตหมวดหมู่... หน้าเว็บจะรีเฟรชข้อมูลในไม่ช้า');
+            setState({ showCategoryForm: false });
+            setTimeout(loadAllData, 3000);
+        }
+
+        function handleDeleteCategory(categoryId) {
+            const categoryToDelete = state.categories.find(c => c.id.toString() === categoryId.toString());
+            if (state.products.some(p => p.category === categoryToDelete.name)) {
+                return actions.showAlert(`ไม่สามารถลบได้ เนื่องจากมีสินค้าใช้หมวดหมู่นี้`);
+            }
+            actions.showConfirm(`คุณต้องการลบหมวดหมู่ "${categoryToDelete.name}" หรือไม่?`, async () => {
+                await postData('deleteCategory', { id: categoryId });
+                actions.showAlert('กำลังลบหมวดหมู่... หน้าเว็บจะรีเฟรชข้อมูลในไม่ช้า');
+                setTimeout(loadAllData, 2000);
+            });
+        }
+
+        function handleQRCodeUpload(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    setState({ paymentSettings: { ...state.paymentSettings, qrCodeImage: e.target.result } });
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        async function handlePaymentSettingsUpdate(e) {
+            e.preventDefault();
+            const accountName = e.target.elements.accountName.value;
+            const bankInfo = e.target.elements.bankInfo.value;
+            const updatedSettings = { ...state.paymentSettings, accountName, bankInfo };
+            
+            await postData('updateSettings', updatedSettings);
+            actions.showAlert('กำลังบันทึกการตั้งค่า...');
+            setTimeout(loadAllData, 2000);
+        }
+
+        async function handleAddProduct(e) {
+            e.preventDefault();
+            const form = e.target.elements;
+            const newProduct = {
+                name: form.name.value,
+                price: Number(form.price.value),
+                description: form.description.value,
+                category: form.category.value,
+                stock: Number(form.stock.value),
+                image: `https://placehold.co/600x400/22c55e/ffffff?text=${encodeURIComponent(form.name.value)}`
+            };
+            if (!newProduct.name || !newProduct.price || !newProduct.category || !newProduct.stock) {
+                return actions.showAlert('กรุณากรอกข้อมูลให้ครบถ้วน');
+            }
+            await postData('addProduct', newProduct);
+            actions.showAlert('กำลังเพิ่มสินค้า... หน้าเว็บจะรีเฟรชข้อมูลในไม่ช้า');
+            setState({ showProductForm: false });
+            setTimeout(loadAllData, 2000);
+        }
+
+        async function handleUpdateProduct(e) {
+            e.preventDefault();
+            const form = e.target.elements;
+            const id = state.productForm.id;
+            const updatedProductData = {
+                id: id,
+                name: form.name.value,
+                price: Number(form.price.value),
+                description: form.description.value,
+                category: form.category.value,
+                stock: Number(form.stock.value),
+            };
+            await postData('updateProduct', updatedProductData);
+            actions.showAlert('กำลังอัปเดตสินค้า... หน้าเว็บจะรีเฟรชข้อมูลในไม่ช้า');
+            setState({ showProductForm: false });
+            setTimeout(loadAllData, 2000);
+        }
+
+        function handleDeleteProduct(productId) {
+            actions.showConfirm('คุณต้องการลบสินค้านี้หรือไม่?', async () => {
+                await postData('deleteProduct', { id: productId });
+                actions.showAlert('กำลังลบสินค้า... หน้าเว็บจะรีเฟรชข้อมูลในไม่ช้า');
+                setTimeout(loadAllData, 2000);
+            });
+        }
+        
+        function handleCheckout(e) {
+            e.preventDefault();
+            const contactName = e.target.elements.contactName.value;
+            const email = e.target.elements.email.value;
+            if (!contactName || !email) return actions.showAlert('กรุณากรอกข้อมูลให้ครบถ้วน');
+            setState({ showCheckout: false, showPayment: true, customerInfo: { contactName, email } });
+        }
+
+        async function completeOrder() {
+            const currentOrderData = {
+                orderDate: new Date().toISOString(),
+                customerInfo: { ...state.customerInfo },
+                items: [...state.cart],
+                totalAmount: state.cart.reduce((total, item) => total + (item.price * item.quantity), 0),
+                status: 'รอดำเนินการ'
+            };
+            
+            await postData('createOrder', currentOrderData);
+            
+            // Because no-cors can't read response, we can't get the new order ID.
+            // We'll show a generic summary.
+            const optimisticOrderData = { ...currentOrderData, orderId: Date.now() };
+            setState({ orderData: optimisticOrderData, cart: [], showPayment: false, showOrderSummary: true });
+            setTimeout(loadAllData, 5000); // Reload all data after order
+        }
+
+        function finishOrder() {
+            setState({ customerInfo: { contactName: '', email: '' }, showOrderSummary: false, orderComplete: true });
+            setTimeout(() => setState({ orderComplete: false }), 3000);
+        }
+
+        async function handleUpdateOrderStatus(orderId, newStatus) {
+            await postData('updateOrderStatus', { id: orderId, status: newStatus });
+            actions.showAlert(`กำลังอัปเดตสถานะออเดอร์...`);
+            setTimeout(loadAllData, 2000);
+        }
+
+        function handleDeleteOrder(orderId) {
+            actions.showConfirm(`คุณต้องการลบออเดอร์ #${orderId} ใช่หรือไม่?`, async () => {
+                await postData('deleteOrder', { id: orderId });
+                actions.showAlert(`กำลังลบออเดอร์...`);
+                setTimeout(loadAllData, 2000);
+            });
+        }
+        
+        // --- Event Delegation Setup ---
+        function setupEventListeners() {
+            document.body.addEventListener('click', e => {
+                const target = e.target.closest('[data-action]');
+                if (!target) return;
+                const [action, ...params] = target.dataset.action.split(':');
+                const param = params.join(':');
+                if (actions[action]) {
+                    e.preventDefault();
+                    actions[action](param);
+                }
+            });
+
+            document.body.addEventListener('submit', e => {
+                const target = e.target;
+                if (target.id === 'admin-login-form') { e.preventDefault(); handleAdminLogin(e); }
+                if (target.id === 'category-form') { e.preventDefault(); state.categoryForm.id ? handleUpdateCategory(e) : handleAddCategory(e); }
+                if (target.id === 'product-form') { e.preventDefault(); state.productForm.id ? handleUpdateProduct(e) : handleAddProduct(e); }
+                if (target.id === 'checkout-form') { e.preventDefault(); handleCheckout(e); }
+                if (target.id === 'payment-settings-form') { e.preventDefault(); handlePaymentSettingsUpdate(e); }
+            });
+
+            document.body.addEventListener('change', e => {
+                const target = e.target;
+                if (target.closest('[data-action]') && target.tagName.toLowerCase() === 'select') {
+                    const select = target.closest('[data-action]');
+                    const action = select.dataset.action;
+                    const id = select.dataset.id;
+                    if (actions[action]) actions[action](id, e.target.value);
+                }
+                if (target.id === 'qr-upload') {
+                    handleQRCodeUpload(e);
+                }
+            });
+        }
+
+        // --- Initial Load ---
+        async function loadAllData() {
+            setState({ isLoading: true });
+            const [categories, products, orders, settings] = await Promise.all([
+                fetchData('getCategories'),
+                fetchData('getProducts'),
+                fetchData('getOrders'),
+                fetchData('getSettings')
+            ]);
+            
+            setState({
+                categories: categories || [],
+                products: products || [],
+                orders: orders || [],
+                paymentSettings: { ...state.paymentSettings, ...settings },
+                isLoading: false
+            });
+        }
+
+        function main() {
+            render(); // Initial render for URL check
+            if (SCRIPT_URL === "YOUR_GOOGLE_APPS_SCRIPT_URL") return;
+            
+            setupEventListeners();
+            loadAllData();
+        }
+        
+        main();
+        // The rest of the HTML template functions (ShopView, AdminView, Modals, etc.) are omitted for brevity
+        // but are identical to the previous version. They are included in the full code block.
+        // --- HTML Template Functions (Identical to previous version) ---
+        function ShopView() {
+            const filteredProducts = state.selectedCategory 
+                ? state.products.filter(p => p.category === state.selectedCategory)
+                : state.products;
+
+            return `
+                <div class="min-h-screen bg-gradient-to-br from-green-50 to-blue-50">
+                    <header class="bg-white shadow-lg sticky top-0 z-40">
+                        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                            <div class="flex justify-between items-center">
+                                <div class="flex items-center space-x-3">
+                                    <i data-lucide="graduation-cap" class="h-8 w-8 text-green-600"></i>
+                                    <div>
+                                        <h1 class="text-2xl font-bold text-green-800">ครูพร้อมสอน</h1>
+                                        <p class="text-sm text-green-600">หลักสูตร 68 ครบ จบ ทุกวิชา</p>
+                                    </div>
+                                </div>
+                                <div class="flex items-center space-x-2 sm:space-x-4">
+                                    <button data-action="showAdminLogin" class="flex items-center space-x-2 px-3 sm:px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition">
+                                        <i data-lucide="user" class="h-4 w-4"></i>
+                                        <span class="hidden sm:inline">แอดมิน</span>
+                                    </button>
+                                    <button data-action="showCheckout" class="relative flex items-center space-x-2 px-3 sm:px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition">
+                                        <i data-lucide="shopping-cart" class="h-4 w-4"></i>
+                                        <span class="hidden sm:inline">ตะกร้า</span>
+                                        ${state.cart.length > 0 ? `<span class="absolute -top-2 -right-2 bg-red-500 text-white rounded-full h-5 w-5 text-xs flex items-center justify-center">${state.cart.reduce((sum, item) => sum + item.quantity, 0)}</span>` : ''}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+                    <section class="bg-gradient-to-r from-green-600 to-blue-600 text-white py-16">
+                        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+                            <h2 class="text-4xl font-bold mb-4">เรียนกับครูมืออาชีพ</h2>
+                            <p class="text-xl mb-8">หลักสูตรครบครัน ทุกระดับชั้น พร้อมสอบเข้ามหาวิทยาลัย</p>
+                            <div class="flex justify-center space-x-8 text-center">
+                                <div><i data-lucide="book-open" class="h-12 w-12 mx-auto mb-2"></i><p class="font-semibold">68 หลักสูตร</p></div>
+                                <div><i data-lucide="graduation-cap" class="h-12 w-12 mx-auto mb-2"></i><p class="font-semibold">ครูมืออาชีพ</p></div>
+                                <div><i data-lucide="package" class="h-12 w-12 mx-auto mb-2"></i><p class="font-semibold">เนื้อหาครบครัน</p></div>
+                            </div>
+                        </div>
+                    </section>
+                    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+                        <h3 class="text-3xl font-bold text-center mb-8 text-gray-800">หลักสูตรของเรา</h3>
+                        <div class="flex flex-wrap justify-center gap-2 mb-8">
+                            <button data-action="setSelectedCategory:" class="px-4 py-2 rounded-full transition ${state.selectedCategory === '' ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">ทั้งหมด</button>
+                            ${state.categories.map(category => `<button data-action="setSelectedCategory:${category.name}" class="px-4 py-2 rounded-full transition ${state.selectedCategory === category.name ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}">${category.name}</button>`).join('')}
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                            ${filteredProducts.map(product => `
+                                <div class="bg-white rounded-xl shadow-lg overflow-hidden hover:shadow-2xl transition-shadow duration-300 flex flex-col">
+                                    <img src="${product.image}" alt="${product.name}" class="w-full h-48 object-cover" onerror="this.onerror=null;this.src='https://placehold.co/600x400/ef4444/ffffff?text=Image+Error';">
+                                    <div class="p-6 flex flex-col flex-grow">
+                                        <div class="flex justify-between items-start mb-2">
+                                            <h4 class="text-lg font-semibold text-gray-800 flex-1 pr-2">${product.name}</h4>
+                                            <span class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap">${product.category}</span>
+                                        </div>
+                                        <p class="text-gray-600 mb-4 text-sm flex-grow">${product.description}</p>
+                                        <div class="flex justify-between items-center mt-auto mb-4">
+                                            <span class="text-2xl font-bold text-green-600">฿${product.price.toLocaleString()}</span>
+                                            <span class="text-gray-500 text-sm">คงเหลือ: ${product.stock}</span>
+                                        </div>
+                                        <button data-action="addToCart:${product.id}" ${product.stock === 0 ? 'disabled' : ''} class="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed">${product.stock === 0 ? 'หมด' : 'เพิ่มลงตะกร้า'}</button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                        ${filteredProducts.length === 0 ? `<div class="text-center py-16"><p class="text-gray-500 text-lg">ไม่มีสินค้าในหมวดหมู่นี้</p></div>` : ''}
+                    </main>
+                </div>
+            `;
+        }
+        
+        function AdminView() {
+            const pageContent = {
+                orders: OrderManagement,
+                admin: ProductManagement,
+                categories: CategoryManagement,
+                payment: PaymentSettingsManagement
+            };
+            return `
+                <div class="min-h-screen bg-gray-50">
+                    <header class="bg-white shadow sticky top-0 z-40">
+                        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+                            <div class="flex justify-between items-center">
+                                <h1 class="text-2xl font-bold text-gray-800">ระบบจัดการร้าน</h1>
+                                <button data-action="handleAdminLogout" class="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"><i data-lucide="log-out" class="h-4 w-4"></i><span>ออกจากระบบ</span></button>
+                            </div>
+                        </div>
+                    </header>
+                    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                        <div class="flex flex-wrap gap-1 mb-8 bg-gray-200 p-1 rounded-lg w-fit">
+                            <button data-action="setCurrentPage:orders" class="px-4 py-2 rounded-lg font-medium transition flex items-center ${state.currentPage === 'orders' ? 'bg-white text-gray-800 shadow' : 'text-gray-600 hover:text-gray-800'}"><i data-lucide="list-ordered" class="h-4 w-4 mr-2"></i>จัดการออเดอร์</button>
+                            <button data-action="setCurrentPage:admin" class="px-4 py-2 rounded-lg font-medium transition flex items-center ${state.currentPage === 'admin' ? 'bg-white text-gray-800 shadow' : 'text-gray-600 hover:text-gray-800'}"><i data-lucide="package" class="h-4 w-4 mr-2"></i>จัดการสินค้า</button>
+                            <button data-action="setCurrentPage:categories" class="px-4 py-2 rounded-lg font-medium transition flex items-center ${state.currentPage === 'categories' ? 'bg-white text-gray-800 shadow' : 'text-gray-600 hover:text-gray-800'}"><i data-lucide="tags" class="h-4 w-4 mr-2"></i>จัดการหมวดหมู่</button>
+                            <button data-action="setCurrentPage:payment" class="px-4 py-2 rounded-lg font-medium transition flex items-center ${state.currentPage === 'payment' ? 'bg-white text-gray-800 shadow' : 'text-gray-600 hover:text-gray-800'}"><i data-lucide="settings" class="h-4 w-4 mr-2"></i>ตั้งค่าชำระเงิน</button>
+                        </div>
+                        ${pageContent[state.currentPage] ? pageContent[state.currentPage]() : ''}
+                    </main>
+                </div>
+            `;
+        }
+
+        function ProductManagement() {
+            return `
+                <div>
+                    <div class="flex justify-between items-center mb-6"><h2 class="text-xl font-semibold">จัดการสินค้า</h2><button data-action="showProductForm:" class="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"><i data-lucide="plus" class="h-4 w-4"></i><span>เพิ่มสินค้า</span></button></div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        ${state.products.map(product => `
+                            <div class="bg-white rounded-lg shadow overflow-hidden"><img src="${product.image}" alt="${product.name}" class="w-full h-32 object-cover" onerror="this.onerror=null;this.src='https://placehold.co/600x400/ef4444/ffffff?text=Image+Error';"><div class="p-4"><h3 class="font-semibold mb-2 truncate">${product.name}</h3><p class="text-gray-600 text-sm mb-2 h-10 overflow-hidden">${product.description}</p><div class="flex justify-between items-center mb-3"><span class="font-bold text-green-600">฿${product.price.toLocaleString()}</span><span class="text-sm text-gray-500">คงเหลือ: ${product.stock}</span></div><div class="flex space-x-2"><button data-action="showProductForm:${product.id}" class="flex-1 flex items-center justify-center space-x-1 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"><i data-lucide="edit-2" class="h-4 w-4"></i><span>แก้ไข</span></button><button data-action="handleDeleteProduct:${product.id}" class="flex-1 flex items-center justify-center space-x-1 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition"><i data-lucide="trash-2" class="h-4 w-4"></i><span>ลบ</span></button></div></div></div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function CategoryManagement() {
+            return `
+                <div>
+                    <div class="flex justify-between items-center mb-6"><h2 class="text-xl font-semibold">จัดการหมวดหมู่</h2><button data-action="showCategoryForm:" class="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"><i data-lucide="plus" class="h-4 w-4"></i><span>เพิ่มหมวดหมู่</span></button></div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                        ${state.categories.map(category => `
+                            <div class="bg-white rounded-lg shadow p-4"><div class="flex items-center justify-between mb-3"><h3 class="font-semibold text-lg">${category.name}</h3><i data-lucide="tags" class="h-5 w-5 text-gray-400"></i></div><p class="text-gray-600 text-sm mb-4">มีสินค้า ${state.products.filter(p => p.category === category.name).length} รายการ</p><div class="flex space-x-2"><button data-action="showCategoryForm:${category.id}" class="flex-1 flex items-center justify-center space-x-1 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"><i data-lucide="edit-2" class="h-3 w-3"></i><span class="text-sm">แก้ไข</span></button><button data-action="handleDeleteCategory:${category.id}" class="flex-1 flex items-center justify-center space-x-1 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition"><i data-lucide="trash-2" class="h-3 w-3"></i><span class="text-sm">ลบ</span></button></div></div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
+        function PaymentSettingsManagement() {
+            return `
+                <div>
+                    <h2 class="text-xl font-semibold mb-6">ตั้งค่าชำระเงิน</h2>
+                    <form id="payment-settings-form">
+                        <div class="bg-white rounded-lg shadow p-6">
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                                <div>
+                                    <h3 class="text-lg font-semibold mb-4">QR Code สำหรับชำระเงิน</h3>
+                                    <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center">
+                                        <img src="${state.paymentSettings.qrCodeImage}" alt="QR Code" class="w-48 h-48 mx-auto object-contain mb-4 border rounded-lg" onerror="this.onerror=null;this.src='https://placehold.co/300x300/f3f4f6/6b7280?text=QR+Code';">
+                                        <input type="file" accept="image/*" id="qr-upload" class="hidden">
+                                        <label for="qr-upload" class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer transition"><i data-lucide="plus" class="h-4 w-4 mr-2"></i>อัปโหลด QR Code</label>
+                                        <p class="text-sm text-gray-500 mt-2">รองรับไฟล์ JPG, PNG</p>
+                                    </div>
+                                </div>
+                                <div>
+                                    <h3 class="text-lg font-semibold mb-4">ข้อมูลบัญชี</h3>
+                                    <div class="space-y-4">
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2">ชื่อบัญชี</label>
+                                            <input type="text" name="accountName" value="${state.paymentSettings.accountName}" class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="ชื่อเจ้าของบัญชี">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2">ข้อมูลธนาคาร</label>
+                                            <input type="text" name="bankInfo" value="${state.paymentSettings.bankInfo}" class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500" placeholder="ธนาคาร: เลขบัญชี">
+                                        </div>
+                                        <button type="submit" class="w-full bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition">บันทึกการตั้งค่า</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            `;
+        }
+        
+        function OrderManagement() {
+            const getStatusClass = (status) => {
+                switch (status) {
+                    case 'สำเร็จ': return 'bg-green-100 text-green-800';
+                    case 'รอดำเนินการ': return 'bg-yellow-100 text-yellow-800';
+                    case 'ยกเลิก': return 'bg-red-100 text-red-800';
+                    default: return 'bg-gray-100 text-gray-800';
+                }
+            };
+            return `
+                <div>
+                    <h2 class="text-xl font-semibold mb-6">จัดการออเดอร์ (${state.orders.length})</h2>
+                    <div class="bg-white rounded-lg shadow overflow-x-auto">
+                        <table class="w-full min-w-max">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="text-left py-3 px-4 font-semibold text-sm">ออเดอร์ ID</th>
+                                    <th class="text-left py-3 px-4 font-semibold text-sm">วันที่</th>
+                                    <th class="text-left py-3 px-4 font-semibold text-sm">ลูกค้า</th>
+                                    <th class="text-right py-3 px-4 font-semibold text-sm">ยอดรวม</th>
+                                    <th class="text-center py-3 px-4 font-semibold text-sm">สถานะ</th>
+                                    <th class="text-center py-3 px-4 font-semibold text-sm">จัดการ</th>
+                                </tr>
+                            </thead>
+                            <tbody class="text-gray-700">
+                                ${state.orders.map(order => `
+                                    <tr class="border-b border-gray-200 hover:bg-gray-50">
+                                        <td class="py-3 px-4">#${order.id}</td>
+                                        <td class="py-3 px-4">${new Date(order.orderDate).toLocaleDateString('th-TH')}</td>
+                                        <td class="py-3 px-4">${order.customerInfo.contactName}</td>
+                                        <td class="py-3 px-4 text-right">฿${order.totalAmount.toLocaleString()}</td>
+                                        <td class="py-3 px-4 text-center">
+                                            <span class="px-2 py-1 rounded-full text-xs font-medium ${getStatusClass(order.status)}">${order.status}</span>
+                                        </td>
+                                        <td class="py-3 px-4 text-center">
+                                            <div class="flex items-center justify-center gap-2">
+                                                <button data-action="handleViewOrderDetails:${order.id}" class="text-blue-500 hover:text-blue-700"><i data-lucide="eye" style="width:18px; height:18px;"></i></button>
+                                                <select data-action="handleUpdateOrderStatus" data-id="${order.id}" class="text-xs border border-gray-300 rounded p-1">
+                                                    <option ${order.status === 'รอดำเนินการ' ? 'selected' : ''}>รอดำเนินการ</option>
+                                                    <option ${order.status === 'สำเร็จ' ? 'selected' : ''}>สำเร็จ</option>
+                                                    <option ${order.status === 'ยกเลิก' ? 'selected' : ''}>ยกเลิก</option>
+                                                </select>
+                                                <button data-action="handleDeleteOrder:${order.id}" class="text-red-500 hover:text-red-700"><i data-lucide="trash-2" style="width:18px; height:18px;"></i></button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                        ${state.orders.length === 0 ? `<p class="text-center text-gray-500 py-8">ยังไม่มีรายการสั่งซื้อ</p>` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        function Modal(content, closeAction = '') {
+            return `
+                <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" data-action="${closeAction}">
+                    <div class="bg-white p-6 rounded-lg shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto modal-content" onclick="event.stopPropagation()">
+                        ${content}
+                    </div>
+                </div>
+            `;
+        }
+
+        function AdminLoginModal() {
+            return Modal(`
+                <h3 class="text-lg font-semibold mb-4">เข้าสู่ระบบแอดมิน</h3>
+                <form id="admin-login-form">
+                    <div class="mb-4"><label class="block text-sm font-medium mb-2">ชื่อผู้ใช้</label><input type="text" name="username" class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"></div>
+                    <div class="mb-4"><label class="block text-sm font-medium mb-2">รหัสผ่าน</label><input type="password" name="password" class="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"></div>
+                    <div class="flex space-x-3"><button type="submit" class="flex-1 bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition">เข้าสู่ระบบ</button><button type="button" data-action="closeAdminLogin" class="flex-1 bg-gray-400 text-white py-2 rounded-lg hover:bg-gray-500 transition">ยกเลิก</button></div>
+                </form>
+            `, 'closeAdminLogin');
+        }
+
+        function CategoryFormModal() {
+            return Modal(`
+                <h3 class="text-lg font-semibold mb-4">${state.categoryForm.id ? 'แก้ไขหมวดหมู่' : 'เพิ่มหมวดหมู่ใหม่'}</h3>
+                <form id="category-form">
+                    <div class="mb-4"><label class="block text-sm font-medium mb-2">ชื่อหมวดหมู่</label><input type="text" name="name" value="${state.categoryForm.name}" class="w-full px-3 py-2 border rounded-lg" placeholder="เช่น วิทยาศาสตร์"></div>
+                    <div class="flex space-x-3"><button type="submit" class="flex-1 bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition">${state.categoryForm.id ? 'อัปเดต' : 'เพิ่ม'}</button><button type="button" data-action="closeCategoryForm" class="flex-1 bg-gray-400 text-white py-2 rounded-lg hover:bg-gray-500 transition">ยกเลิก</button></div>
+                </form>
+            `, 'closeCategoryForm');
+        }
+        
+        function ProductFormModal() {
+            return Modal(`
+                <h3 class="text-lg font-semibold mb-4">${state.productForm.id ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</h3>
+                <form id="product-form">
+                    <div class="space-y-3">
+                        <div><label class="block text-sm font-medium mb-1">ชื่อสินค้า</label><input type="text" name="name" value="${state.productForm.name}" class="w-full px-3 py-2 border rounded-lg"></div>
+                        <div><label class="block text-sm font-medium mb-1">ราคา</label><input type="number" name="price" value="${state.productForm.price}" class="w-full px-3 py-2 border rounded-lg"></div>
+                        <div><label class="block text-sm font-medium mb-1">คำอธิบาย</label><textarea name="description" class="w-full px-3 py-2 border rounded-lg" rows="2">${state.productForm.description}</textarea></div>
+                        <div><label class="block text-sm font-medium mb-1">หมวดหมู่</label>
+                            <select name="category" class="w-full px-3 py-2 border rounded-lg">
+                                <option value="">เลือกหมวดหมู่</option>
+                                ${state.categories.map(c => `<option value="${c.name}" ${state.productForm.category === c.name ? 'selected' : ''}>${c.name}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div><label class="block text-sm font-medium mb-1">จำนวนคงเหลือ</label><input type="number" name="stock" value="${state.productForm.stock}" class="w-full px-3 py-2 border rounded-lg"></div>
+                    </div>
+                    <div class="flex space-x-3 mt-4"><button type="submit" class="flex-1 bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition">${state.productForm.id ? 'อัปเดต' : 'เพิ่ม'}</button><button type="button" data-action="closeProductForm" class="flex-1 bg-gray-400 text-white py-2 rounded-lg hover:bg-gray-500 transition">ยกเลิก</button></div>
+                </form>
+            `, 'closeProductForm');
+        }
+
+        function CheckoutModal() {
+            const totalPrice = state.cart.reduce((total, item) => total + (item.price * item.quantity), 0);
+            return Modal(`
+                <h3 class="text-lg font-semibold mb-4">ตะกร้าสินค้า</h3>
+                ${state.cart.length === 0 ? `<p class="text-gray-500 text-center py-4">ไม่มีสินค้าในตะกร้า</p>` : `
+                    <div class="space-y-3 mb-4 max-h-60 overflow-y-auto pr-2">
+                    ${state.cart.map(item => `
+                        <div class="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                            <div class="flex-1"><h4 class="font-medium text-sm">${item.name}</h4><p class="text-green-600 font-semibold">฿${item.price.toLocaleString()}</p></div>
+                            <div class="flex items-center space-x-2">
+                                <button data-action="updateCartQuantity:${item.id}:-1" class="w-6 h-6 bg-gray-200 rounded text-sm hover:bg-gray-300">-</button>
+                                <span class="w-8 text-center text-sm">${item.quantity}</span>
+                                <button data-action="updateCartQuantity:${item.id}:1" class="w-6 h-6 bg-gray-200 rounded text-sm hover:bg-gray-300">+</button>
+                                <button data-action="removeFromCart:${item.id}" class="ml-2 text-red-500 hover:text-red-700"><i data-lucide="trash-2" class="h-4 w-4"></i></button>
+                            </div>
+                        </div>`).join('')}
+                    </div>
+                    <div class="border-t pt-3 mb-4"><div class="flex justify-between items-center text-lg font-semibold"><span>รวมทั้งหมด:</span><span class="text-green-600">฿${totalPrice.toLocaleString()}</span></div></div>
+                    <form id="checkout-form">
+                        <div class="space-y-3 mb-4">
+                            <input type="text" name="contactName" placeholder="ชื่อที่ใช้ติดต่อ (เช่น Facebook, TikTok, IG)" class="w-full px-3 py-2 border rounded-lg text-sm" required>
+                            <input type="email" name="email" placeholder="Gmail สำหรับรับแผนการเรียน" class="w-full px-3 py-2 border rounded-lg text-sm" required>
+                        </div>
+                        <div class="flex space-x-3"><button type="submit" class="flex-1 bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition">ชำระเงิน</button><button type="button" data-action="closeCheckout" class="flex-1 bg-gray-400 text-white py-2 rounded-lg hover:bg-gray-500 transition">ปิด</button></div>
+                    </form>
+                `}
+            `, 'closeCheckout');
+        }
+
+        function PaymentModal() {
+            const totalPrice = state.cart.reduce((total, item) => total + (item.price * item.quantity), 0);
+            return Modal(`
+                <h3 class="text-lg font-semibold mb-4 text-center">ชำระเงินผ่าน QR Code</h3>
+                <div class="mb-4">
+                    <div class="w-64 h-64 bg-gray-100 mx-auto rounded-lg flex items-center justify-center mb-4 overflow-hidden"><img src="${state.paymentSettings.qrCodeImage}" alt="QR Code" class="w-full h-full object-contain" onerror="this.onerror=null;this.src='https://placehold.co/300x300/f3f4f6/6b7280?text=QR+Code';"></div>
+                    <div class="text-center space-y-2"><p class="text-lg font-semibold text-green-600">จำนวนเงิน: ฿${totalPrice.toLocaleString()}</p><p class="text-sm text-gray-600">สแกน QR Code ด้วยแอปธนาคารเพื่อชำระเงิน</p><p class="text-xs text-blue-600 font-medium">${state.paymentSettings.bankInfo}</p><p class="text-xs text-gray-500">ชื่อบัญชี: ${state.paymentSettings.accountName}</p><div class="bg-yellow-50 p-2 rounded-lg mt-3"><p class="text-xs text-yellow-800">💡 หลังชำระเงินแล้ว กรุณากดปุ่ม "ยืนยันการชำระเงิน"</p></div></div>
+                </div>
+                <div class="flex space-x-3"><button data-action="completeOrder" class="flex-1 bg-green-600 text-white py-2 rounded-lg hover:bg-green-700 transition">ยืนยันการชำระเงิน</button><button data-action="closePayment" class="flex-1 bg-gray-400 text-white py-2 rounded-lg hover:bg-gray-500 transition">ยกเลิก</button></div>
+            `, 'closePayment');
+        }
+
+        function OrderSummaryModal(order) {
+            return Modal(OrderSummaryContent(order), 'finishOrder');
+        }
+        
+        function OrderDetailsModal(order) {
+            return Modal(OrderSummaryContent(order, true), 'closeOrderDetails');
+        }
+
+        function OrderSummaryContent(order, isAdmin = false) {
+            return `
+                <div class="text-center mb-6"><div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4"><i data-lucide="package" class="w-8 h-8 text-green-600"></i></div><h3 class="text-xl font-bold text-gray-800 mb-2">${isAdmin ? 'รายละเอียดออเดอร์' : 'สรุปการสั่งซื้อ'}</h3><p class="text-sm text-gray-600">เลขที่ออเดอร์: #${order.id || order.orderId}</p><p class="text-sm text-gray-600">${new Date(order.orderDate).toLocaleString('th-TH')}</p></div>
+                <div class="mb-6 p-4 bg-blue-50 rounded-lg"><h4 class="font-semibold text-gray-800 mb-2">ข้อมูลลูกค้า</h4><div class="text-sm space-y-1"><p><span class="font-medium">ชื่อติดต่อ:</span> ${order.customerInfo.contactName}</p><p><span class="font-medium">อีเมล:</span> ${order.customerInfo.email}</p></div></div>
+                <div class="mb-6"><h4 class="font-semibold text-gray-800 mb-3">รายการสั่งซื้อ</h4><div class="space-y-3 max-h-40 overflow-y-auto pr-2">${order.items.map(item => `<div class="flex justify-between items-center p-3 bg-gray-50 rounded-lg"><div class="flex-1"><h5 class="font-medium text-sm text-gray-800">${item.name}</h5><p class="text-sm text-green-600 font-semibold">฿${item.price.toLocaleString()} x ${item.quantity}</p></div><div class="text-right"><p class="font-semibold text-gray-800">฿${(item.price * item.quantity).toLocaleString()}</p></div></div>`).join('')}</div></div>
+                <div class="mb-6 p-4 bg-green-50 rounded-lg"><div class="flex justify-between items-center"><span class="text-lg font-bold text-gray-800">ยอดรวมทั้งสิ้น:</span><span class="text-2xl font-bold text-green-600">฿${order.totalAmount.toLocaleString()}</span></div></div>
+                ${!isAdmin ? `<div class="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg"><h4 class="font-semibold text-yellow-800 mb-2 flex items-center"><i data-lucide="alert-triangle" class="w-4 h-4 mr-2"></i>สำคัญ!</h4><div class="text-sm text-yellow-800 space-y-2"><p>📱 <strong>แคปหน้าจอนี้</strong> เพื่อเก็บไว้เป็นหลักฐาน</p><p>💬 <strong>ส่งหน้าจอนี้</strong> พร้อมสลิปการโอนเงินมาที่ Facebook: ครูพร้อมสอน</p></div></div><div class="flex space-x-3"><button data-action="finishOrder" class="flex-1 bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 transition font-medium">✅ เข้าใจแล้ว ดำเนินการต่อ</button></div>` : `<button data-action="closeOrderDetails" class="w-full bg-gray-500 text-white py-2 rounded-lg hover:bg-gray-600 transition">ปิด</button>`}
+            `;
+        }
+
+        function OrderCompleteModal() {
+            return Modal(`<div class="text-center"><div class="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4"><i data-lucide="check-circle" class="w-8 h-8 text-green-600"></i></div><h3 class="text-lg font-semibold text-gray-800 mb-2">เรียบร้อย! 🎉</h3><div class="text-sm text-gray-600 space-y-1"><p class="font-medium text-green-600">✅ ขั้นตอนการสั่งซื้อเสร็จสิ้น</p><p>อย่าลืมส่งหลักฐานการโอนเงินมานะคะ</p></div></div>`);
+        }
+
+        function AlertModal(message) {
+            return Modal(`<div class="text-center"><h3 class="text-lg font-semibold mb-4">แจ้งเตือน</h3><p class="text-gray-700 mb-6">${message}</p><button data-action="closeAlert" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition">ตกลง</button></div>`, 'closeAlert');
+        }
+
+        function ConfirmModal(message) {
+            return Modal(`<div class="text-center"><h3 class="text-lg font-semibold mb-4">ยืนยันการกระทำ</h3><p class="text-gray-700 mb-6">${message}</p><div class="flex space-x-3"><button data-action="handleConfirm" class="flex-1 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 transition">ยืนยัน</button><button data-action="closeConfirm" class="flex-1 bg-gray-400 text-white py-2 rounded-lg hover:bg-gray-500 transition">ยกเลิก</button></div></div>`, 'closeConfirm');
+        }
+    </script>
+</body>
+</html>
