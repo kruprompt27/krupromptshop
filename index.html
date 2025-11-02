@@ -327,29 +327,7 @@
             font-weight: 600;
         }
         
-        .order-button {
-            width: 100%;
-            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
-            color: white;
-            border: none;
-            padding: 16px;
-            border-radius: 12px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.2s;
-            margin-top: 20px;
-        }
-        
-        .order-button:hover {
-            transform: translateY(-2px);
-        }
-        
-        .order-button:disabled {
-            background: #94a3b8;
-            cursor: not-allowed;
-            transform: none;
-        }
+
         
         .empty-cart {
             text-align: center;
@@ -357,38 +335,24 @@
             padding: 40px 20px;
         }
         
-        .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 2px solid #ffffff;
-            border-radius: 50%;
-            border-top-color: transparent;
-            animation: spin 1s ease-in-out infinite;
-        }
+
         
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        
-        .success-message {
-            background: #dcfce7;
-            color: #166534;
-            padding: 15px;
-            border-radius: 10px;
+        .instruction-note {
+            background: #fef9c3;
+            border: 2px solid #fde047;
+            border-radius: 15px;
+            padding: 20px;
             margin-top: 20px;
-            text-align: center;
-            font-weight: 600;
+            color: #92400e;
+            line-height: 1.6;
         }
         
-        .error-message {
-            background: #fecaca;
-            color: #dc2626;
-            padding: 15px;
-            border-radius: 10px;
-            margin-top: 20px;
-            text-align: center;
-            font-weight: 600;
+        .instruction-note p {
+            margin: 0 0 10px 0;
+        }
+        
+        .instruction-note p:last-child {
+            margin-bottom: 0;
         }
         
         @media (max-width: 768px) {
@@ -416,8 +380,6 @@
    </div>
    <div class="main-content">
     <div class="products-section">
-     <div class="customer-info"><label for="facebook-name" id="contact-label">ชื่อ Facebook สำหรับติดต่อ:</label> <input type="text" id="facebook-name" placeholder="กรุณาใส่ชื่อ Facebook ของคุณ" required>
-     </div>
      <div id="products-container"><!-- Products will be generated here -->
      </div>
     </div>
@@ -436,8 +398,11 @@
       </div>
       <div class="summary-row total"><span>ยอดรวมสุทธิ:</span> <span id="total-amount">0 บาท</span>
       </div>
-     </div><button id="order-button" class="order-button" disabled> <span id="order-button-text">สั่งซื้อแผนการสอน</span> </button>
-     <div id="order-message"></div>
+     </div>
+     <div class="instruction-note">
+      <p><strong>📸 วิธีการสั่งซื้อ:</strong></p>
+      <p>หลังเลือกแผนที่ต้องการเสร็จแล้ว ให้แคปหน้าจอส่วนตะกร้าสินค้านี้ แล้วส่งกลับมาที่แชทของเพจ <strong>"ครูพร้อมสอน"</strong> เพื่อรับช่องทางชำระเงินนะคะ</p>
+     </div>
     </div>
    </div>
   </div>
@@ -500,7 +465,6 @@
         };
 
         let cart = [];
-        let isLoading = false;
 
         // Function to get appropriate emoji for each subject
         function getSubjectEmoji(subject) {
@@ -784,92 +748,13 @@
         }
 
         function setupEventListeners() {
-            document.getElementById('order-button').addEventListener('click', async () => {
-                const facebookName = document.getElementById('facebook-name').value.trim();
-                
-                if (!facebookName) {
-                    showMessage('กรุณาใส่ชื่อ Facebook ของคุณ', 'error');
-                    return;
-                }
-                
-                if (cart.length === 0) {
-                    showMessage('กรุณาเลือกแผนการสอนอย่างน้อย 1 รายการ', 'error');
-                    return;
-                }
-                
-                await submitOrder(facebookName);
-            });
+            // Event listeners for product selection are handled in generateProducts()
         }
 
-        async function submitOrder(facebookName) {
-            if (isLoading) return;
-            
-            isLoading = true;
-            const orderButton = document.getElementById('order-button');
-            const buttonText = document.getElementById('order-button-text');
-            
-            orderButton.disabled = true;
-            buttonText.innerHTML = '<span class="loading"></span> กำลังส่งคำสั่งซื้อ...';
-            
-            try {
-                const subtotal = cart.reduce((sum, item) => sum + item.price, 0);
-                const hasDiscount = cart.length >= 3;
-                const discountAmount = hasDiscount ? Math.round(subtotal * 0.05) : 0;
-                const finalAmount = subtotal - discountAmount;
-                
-                const orderData = {
-                    order_id: `ORD-${Date.now()}`,
-                    customer_facebook: facebookName,
-                    items: JSON.stringify(cart),
-                    total_amount: subtotal,
-                    discount_amount: discountAmount,
-                    final_amount: finalAmount,
-                    order_date: new Date().toISOString(),
-                    status: 'pending'
-                };
-                
-                if (window.dataSdk) {
-                    const result = await window.dataSdk.create(orderData);
-                    
-                    if (result.isOk) {
-                        showMessage('✅ ส่งคำสั่งซื้อเรียบร้อยแล้ว! เราจะติดต่อกลับไปที่ Facebook ของคุณ', 'success');
-                        
-                        // Clear cart and form
-                        cart = [];
-                        document.getElementById('facebook-name').value = '';
-                        document.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
-                            cb.checked = false;
-                        });
-                        renderCart();
-                    } else {
-                        showMessage('เกิดข้อผิดพลาดในการส่งคำสั่งซื้อ กรุณาลองใหม่อีกครั้ง', 'error');
-                    }
-                } else {
-                    showMessage('ระบบไม่พร้อมใช้งาน กรุณาลองใหม่ภายหลัง', 'error');
-                }
-            } catch (error) {
-                showMessage('เกิดข้อผิดพลาดในการส่งคำสั่งซื้อ กรุณาลองใหม่อีกครั้ง', 'error');
-            } finally {
-                isLoading = false;
-                orderButton.disabled = false;
-                const config = window.elementSdk ? window.elementSdk.config : defaultConfig;
-                buttonText.textContent = config.order_button_text || defaultConfig.order_button_text;
-            }
-        }
 
-        function showMessage(message, type) {
-            const messageContainer = document.getElementById('order-message');
-            messageContainer.className = type === 'success' ? 'success-message' : 'error-message';
-            messageContainer.textContent = message;
-            
-            setTimeout(() => {
-                messageContainer.textContent = '';
-                messageContainer.className = '';
-            }, 5000);
-        }
 
         // Initialize app when DOM is loaded
         document.addEventListener('DOMContentLoaded', initApp);
     </script>
- <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'9981e953d5b045b8',t:'MTc2MjA2ODQ2OC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+ <script>(function(){function c(){var b=a.contentDocument||a.contentWindow.document;if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'998201e366fcf305',t:'MTc2MjA2OTQ3NC4wMDAwMDA='};var a=document.createElement('script');a.nonce='';a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
 </html>
